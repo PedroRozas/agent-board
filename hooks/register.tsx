@@ -32,7 +32,9 @@ import { renderBoardList, renderSessionDetail } from './views'
 
 const PANE_ID = 'agent-board'
 const TICK_MS = 3000
-const SESSIONS_DIR_SUFFIX = '/.claude/agent-board/sessions'
+const BOARD_DIR_SUFFIX = '/.claude/agent-board'
+const SESSIONS_DIR_NAME = 'sessions'
+const PRIVATE_DIRECTORY_MODE = '700'
 const EMPTY_BOARD: Board = { sessions: [], refreshedAt: 0 }
 const DASHBOARD_HOST = '127.0.0.1'
 const DASHBOARD_START_ATTEMPTS = 12
@@ -58,7 +60,7 @@ const SELECTED_REF = { plugin: 'agent-board', key: 'selectedId' } as const
 
 const isSet = (value: string | undefined): value is string => value !== undefined && value !== ''
 
-async function sessionsDirectory($: EngineInterface): Promise<string> {
+async function boardDirectory($: EngineInterface): Promise<string> {
   const home = await $.env.get('HOME')
   const userProfile = await $.env.get('USERPROFILE')
 
@@ -66,7 +68,11 @@ async function sessionsDirectory($: EngineInterface): Promise<string> {
     throw new Error('agent-board: ni HOME ni USERPROFILE están definidos')
   }
 
-  return `${isSet(home) ? home : userProfile}${SESSIONS_DIR_SUFFIX}`
+  return `${isSet(home) ? home : userProfile}${BOARD_DIR_SUFFIX}`
+}
+
+async function sessionsDirectory($: EngineInterface): Promise<string> {
+  return `${await boardDirectory($)}/${SESSIONS_DIR_NAME}`
 }
 
 async function readSnapshot($: EngineInterface): Promise<SessionSnapshot | null> {
@@ -139,6 +145,22 @@ async function readPlatform($: EngineInterface): Promise<Platform> {
     $.ui.log(`agent-board: no se pudo detectar la plataforma (${String(error)})`)
 
     return 'other'
+  }
+}
+
+async function securePrivateDirectories($: EngineInterface): Promise<void> {
+  if (await isWindows($)) {
+    return
+  }
+
+  const board = await boardDirectory($)
+  const sessions = await sessionsDirectory($)
+
+  try {
+    await $.process.run(['mkdir', '-p', sessions], { timeoutMs: 2000 })
+    await $.process.run(['chmod', PRIVATE_DIRECTORY_MODE, board, sessions], { timeoutMs: 2000 })
+  } catch (error) {
+    $.ui.log(`agent-board: no se pudieron proteger los permisos de ${board} (${String(error)})`)
   }
 }
 
@@ -370,6 +392,7 @@ export const register: Register = (on, options) => {
   const dashboard = dashboardFor(resolvePort(options.port), language)
 
   on('session.start', async ($, e, next) => {
+    await securePrivateDirectories($)
     await startSession($)
 
     if (language === 'es') {

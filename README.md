@@ -8,10 +8,17 @@ It comes in three views:
 - **Pane**: a panel docked inside Claude Code that lists the sessions and opens the detail of the one you pick.
 - **Text**: the same board printed in the conversation. It works anywhere, including headless and remote sessions.
 
+<img alt="agent-board updating live: a second subagent starts, another finishes, a failed tool is marked on the timeline, and cost, tokens and plan usage go up" src="docs/live.gif" width="100%">
+
+<details>
+<summary>Dashboard overview, light and dark</summary>
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/overview-dark.png">
   <img alt="agent-board dashboard: plan rate limits, KPIs, open sessions, cost by project, tokens by model and a 30-minute timeline of main agents and subagents" src="docs/overview-light.png">
 </picture>
+
+</details>
 
 <details>
 <summary>Session detail: current request, subagents, tokens by model and activity log</summary>
@@ -23,11 +30,11 @@ It comes in three views:
 
 </details>
 
-<sub>Screenshots use demo data.</sub>
+<sub>The animation and screenshots use demo data, with time sped up in the animation.</sub>
 
 ## Why agent-board?
 
-- **Nothing to run or install besides the plugin.** No database, no Docker, no npm install. Each session writes a small JSON file, and the dashboard is a single Node script that uses only Node's standard library. It starts on demand and stops itself after 30 idle minutes.
+- **No database, no Docker, no npm install.** Each session writes a small JSON file. The web view only needs Node: it is a single script that uses Node's standard library, starts on demand and stops itself after 30 idle minutes. The pane and text views need nothing.
 - **It lives where you work.** Besides the web dashboard, the board opens as a pane inside Claude Code and prints as text, so it also works over SSH and in headless sessions.
 - **It shows how much of your plan is left.** The 5-hour and weekly rate limits appear with a pace marker, so you can tell whether you are burning through them too fast.
 - **It stays on your machine.** The dashboard listens only on `127.0.0.1`, rejects requests for any other host and loads nothing from the internet.
@@ -107,6 +114,8 @@ Everything stays on your machine. Keep in mind that the snapshot files are plain
 
 - the first 200 characters of each session's latest prompt;
 - short summaries of recent tool calls, such as file names and shell commands.
+
+On macOS and Linux, every session sets `~/.claude/agent-board` and its `sessions` folder to mode `700` when it starts, so other users on the machine cannot read them. On Windows the files inherit the permissions of your user profile.
 
 The dashboard uses your system fonts and loads nothing from the internet.
 

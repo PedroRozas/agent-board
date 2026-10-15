@@ -364,4 +364,18 @@ describe('agent-board', () => {
     expect(removal?.[4]).toContain(`'${SESSION_FILE}'`)
     expect(world.commands.some(argv => argv[0] === 'uname' || argv[0] === 'rm')).toBe(false)
   })
+
+  test('keeps the board directories private on macOS and Linux', async ($, on) => {
+    const { world } = installWorld(on)
+    await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+
+    expect(world.commands).toContainEqual(['chmod', '700', `${HOME}/.claude/agent-board`, `${HOME}/.claude/agent-board/sessions`])
+  })
+
+  test('leaves directory permissions to Windows', async ($, on) => {
+    const { world } = installWorld(on, { OS: 'Windows_NT', HOME: '', USERPROFILE: HOME }, 'MINGW64_NT')
+    await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+
+    expect(world.commands.some(argv => argv[0] === 'chmod' || argv[0] === 'mkdir')).toBe(false)
+  })
 })
