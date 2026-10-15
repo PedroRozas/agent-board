@@ -65,7 +65,7 @@ async function boardDirectory($: EngineInterface): Promise<string> {
   const userProfile = await $.env.get('USERPROFILE')
 
   if (!isSet(home) && !isSet(userProfile)) {
-    throw new Error('agent-board: ni HOME ni USERPROFILE están definidos')
+    throw new Error('agent-board: neither HOME nor USERPROFILE is set')
   }
 
   return `${isSet(home) ? home : userProfile}${BOARD_DIR_SUFFIX}`
@@ -112,7 +112,7 @@ async function readBranch($: EngineInterface, cwd: string): Promise<string | nul
 
     return exitCode === 0 && branch !== '' ? branch : null
   } catch (error) {
-    $.ui.log(`agent-board: no se pudo leer la rama (${String(error)})`)
+    $.ui.log(`agent-board: could not read the git branch (${String(error)})`)
 
     return null
   }
@@ -142,9 +142,30 @@ async function readPlatform($: EngineInterface): Promise<Platform> {
 
     return exitCode === 0 ? platformFromUname(stdout.trim()) : 'other'
   } catch (error) {
-    $.ui.log(`agent-board: no se pudo detectar la plataforma (${String(error)})`)
+    $.ui.log(`agent-board: could not detect the platform (${String(error)})`)
 
     return 'other'
+  }
+}
+
+async function runPrivateDirectoryCommands($: EngineInterface, board: string, sessions: string): Promise<string | null> {
+  const commands = [
+    ['mkdir', '-p', '-m', PRIVATE_DIRECTORY_MODE, sessions],
+    ['chmod', PRIVATE_DIRECTORY_MODE, board, sessions],
+  ]
+
+  try {
+    for (const command of commands) {
+      const { exitCode, stderr } = await $.process.run(command, { timeoutMs: 2000 })
+
+      if (exitCode !== 0) {
+        return `${command[0]} exited with ${exitCode}: ${stderr.trim()}`
+      }
+    }
+
+    return null
+  } catch (error) {
+    return String(error)
   }
 }
 
@@ -156,11 +177,10 @@ async function securePrivateDirectories($: EngineInterface): Promise<void> {
   const board = await boardDirectory($)
   const sessions = await sessionsDirectory($)
 
-  try {
-    await $.process.run(['mkdir', '-p', sessions], { timeoutMs: 2000 })
-    await $.process.run(['chmod', PRIVATE_DIRECTORY_MODE, board, sessions], { timeoutMs: 2000 })
-  } catch (error) {
-    $.ui.log(`agent-board: no se pudieron proteger los permisos de ${board} (${String(error)})`)
+  const failure = await runPrivateDirectoryCommands($, board, sessions)
+
+  if (failure !== null) {
+    $.ui.log(`agent-board: could not make ${board} private (${failure})`)
   }
 }
 
@@ -177,7 +197,7 @@ async function readSessionFile($: EngineInterface, path: string): Promise<Sessio
 
     return isSessionSnapshot(parsed) ? normalizeSnapshot(parsed) : null
   } catch (error) {
-    $.ui.log(`agent-board: se ignoró ${path} (${String(error)})`)
+    $.ui.log(`agent-board: skipped ${path} (${String(error)})`)
 
     return null
   }
@@ -242,7 +262,7 @@ async function tick($: EngineInterface): Promise<void> {
 
 function runTick($: EngineInterface): void {
   tick($).catch((error: unknown) => {
-    $.ui.log(`agent-board: falló la actualización periódica (${String(error)})`)
+    $.ui.log(`agent-board: periodic refresh failed (${String(error)})`)
   })
 }
 

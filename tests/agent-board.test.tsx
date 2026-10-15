@@ -25,6 +25,8 @@ type World = {
   platform: string
   browserExitCode: number
   cwd: string
+  failingCommand: { name: string; mode: 'throw' | 'exit' } | null
+  logs: string[]
 }
 
 const SPANISH = { options: { language: 'es' } }
@@ -49,6 +51,8 @@ const installWorld = (on: On, env: Readonly<Record<string, string>> = {}, platfo
     platform,
     browserExitCode: 0,
     cwd: '/work/my-app',
+    failingCommand: null,
+    logs: [],
   }
   mock.env(on, { HOME, ...env })
 
@@ -68,8 +72,21 @@ const installWorld = (on: On, env: Readonly<Record<string, string>> = {}, platfo
   on('agent.list', () => ({
     value: world.agents.map(agent => ({ id: agent.id, status: agent.status, description: 'Implement task', type: 'executor-sonnet' })),
   }))
+  on('ui.log', ($, e) => {
+    world.logs.push(e.text)
+
+    return { value: undefined }
+  })
   on('process.run', ($, e) => {
     world.commands.push([...e.argv])
+
+    if (world.failingCommand !== null && e.argv[0] === world.failingCommand.name) {
+      if (world.failingCommand.mode === 'throw') {
+        throw new Error(`${e.argv[0]} is not available`)
+      }
+
+      return { value: { ...PROCESS_OK, exitCode: 1, stderr: 'Operation not permitted\n' } }
+    }
 
     if ((e.argv[e.argv.length - 1] ?? '').includes('dashboard/server.mjs')) {
       world.isDashboardRunning = true
@@ -369,6 +386,7 @@ describe('agent-board', () => {
     const { world } = installWorld(on)
     await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
 
+    expect(world.commands).toContainEqual(['mkdir', '-p', '-m', '700', `${HOME}/.claude/agent-board/sessions`])
     expect(world.commands).toContainEqual(['chmod', '700', `${HOME}/.claude/agent-board`, `${HOME}/.claude/agent-board/sessions`])
   })
 
@@ -378,4 +396,16 @@ describe('agent-board', () => {
 
     expect(world.commands.some(argv => argv[0] === 'chmod' || argv[0] === 'mkdir')).toBe(false)
   })
+
+  for (const mode of ['throw', 'exit'] as const) {
+    test(`when chmod fails (${mode}) it logs the reason and the session keeps publishing`, async ($, on) => {
+      const { clock, world } = installWorld(on)
+      world.failingCommand = { name: 'chmod', mode }
+      await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+      await clock.advance(3000)
+
+      expect(world.logs.some(line => line.startsWith(`agent-board: could not make ${HOME}/.claude/agent-board private`))).toBe(true)
+      expect(readPublished(world).project).toBe('my-app')
+    })
+  }
 })

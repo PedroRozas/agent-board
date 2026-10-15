@@ -28,7 +28,7 @@ const readSessionFile = async (name, now) => {
     return JSON.parse(await readFile(path, 'utf8'))
   } catch (error) {
     if (error.code !== 'ENOENT') {
-      console.error(`agent-board: se ignoró ${name}: ${error.message}`)
+      console.error(`agent-board: skipped ${name}: ${error.message}`)
     }
 
     return null
@@ -105,7 +105,7 @@ const server = createServer((request, response) => {
 })
 
 server.on('error', error => {
-  console.error(`agent-board: no se pudo iniciar en ${HOST}:${PORT}: ${error.message}`)
+  console.error(`agent-board: could not start on ${HOST}:${PORT}: ${error.message}`)
   process.exit(1)
 })
 
