@@ -1,0 +1,12 @@
+{
+  "name": "agent-board",
+  "description": "agent-board: a live board of your Claude Code sessions",
+  "owner": { "name": "Pedro Rozas" },
+  "plugins": [
+    {
+      "name": "agent-board",
+      "source": "./",
+      "description": "Live board of your Claude Code sessions, their subagents, activity and token usage"
+    }
+  ]
+}

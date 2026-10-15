@@ -1,0 +1,21 @@
+{
+  "name": "agent-board",
+  "version": "0.2.0",
+  "description": "Live board of your Claude Code sessions, their subagents, activity and token usage",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of the board, its command and the web dashboard (en uses /agent-board, es uses /agentes)",
+      "options": ["en", "es"],
+      "default": "en"
+    },
+    "port": {
+      "type": "number",
+      "title": "Dashboard port",
+      "description": "Local port of the web dashboard (1024-65535)",
+      "default": 4317
+    }
+  }
+}
