@@ -4,12 +4,6 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title data-i18n="pageTitle"></title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-    />
     <script>
       const THEME_STORAGE_KEY = 'agent-board.theme'
       const THEME_PREFERENCES = ['system', 'light', 'dark']
@@ -102,7 +96,7 @@
         margin: 0;
         background: var(--page);
         color: var(--ink);
-        font-family: 'Instrument Sans', system-ui, sans-serif;
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', Helvetica, Arial, sans-serif;
         font-size: 15px;
         line-height: 1.45;
         font-variant-numeric: tabular-nums;
@@ -717,7 +711,7 @@
       }
 
       .command {
-        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
         font-size: 12.5px;
         color: var(--mono);
         overflow-wrap: anywhere;
@@ -881,6 +875,9 @@
 
       .sessions-table tr.is-selected td {
         background: var(--surface-alt);
+      }
+
+      .sessions-table tr.is-selected td:first-child {
         box-shadow: inset 3px 0 0 var(--accent);
       }
 
@@ -1656,9 +1653,9 @@
           .getElementById('plan')
           .replaceChildren(
             ...windows.map(planWindow),
-            windows.length === 0
-              ? null
-              : el('span', { className: 'plan-note' }, el('span', { className: 'swatch-pace', 'aria-hidden': 'true' }), t('paceNote')),
+            ...(windows.length === 0
+              ? []
+              : [el('span', { className: 'plan-note' }, el('span', { className: 'swatch-pace', 'aria-hidden': 'true' }), t('paceNote'))]),
           )
         document.title = working === 0 ? t('pageTitle') : t('pageTitleWorking', working)
       }
@@ -1972,13 +1969,15 @@
                 ),
                 ...active.map(lane),
               ),
-          quiet.length === 0
-            ? null
-            : el(
-                'p',
-                { className: 'quiet' },
-                t('quietSessions', quiet.length, quiet.map(session => `${session.project} (${formatWhen(session.startedAt)})`).join(', ')),
-              ),
+          ...(quiet.length === 0
+            ? []
+            : [
+                el(
+                  'p',
+                  { className: 'quiet' },
+                  t('quietSessions', quiet.length, quiet.map(session => `${session.project} (${formatWhen(session.startedAt)})`).join(', ')),
+                ),
+              ]),
         )
       }
 
