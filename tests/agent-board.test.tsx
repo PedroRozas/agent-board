@@ -397,15 +397,17 @@ describe('agent-board', () => {
     expect(world.commands.some(argv => argv[0] === 'chmod' || argv[0] === 'mkdir')).toBe(false)
   })
 
-  for (const mode of ['throw', 'exit'] as const) {
-    test(`when chmod fails (${mode}) it logs the reason and the session keeps publishing`, async ($, on) => {
-      const { clock, world } = installWorld(on)
-      world.failingCommand = { name: 'chmod', mode }
-      await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
-      await clock.advance(3000)
+  for (const name of ['mkdir', 'chmod'] as const) {
+    for (const mode of ['throw', 'exit'] as const) {
+      test(`when ${name} fails (${mode}) it logs the reason and the session keeps publishing`, async ($, on) => {
+        const { clock, world } = installWorld(on)
+        world.failingCommand = { name, mode }
+        await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+        await clock.advance(3000)
 
-      expect(world.logs.some(line => line.startsWith(`agent-board: could not make ${HOME}/.claude/agent-board private`))).toBe(true)
-      expect(readPublished(world).project).toBe('my-app')
-    })
+        expect(world.logs.some(line => line.startsWith(`agent-board: could not make ${HOME}/.claude/agent-board private`))).toBe(true)
+        expect(readPublished(world).project).toBe('my-app')
+      })
+    }
   }
 })
