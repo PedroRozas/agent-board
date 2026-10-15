@@ -91,3 +91,7 @@ claude plugin test .
 ```
 
 To try a local copy, start Claude Code with `claude --plugin-dir <path-to-agent-board>`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
