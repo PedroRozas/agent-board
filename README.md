@@ -47,16 +47,16 @@ It is a live view of what is running now. If you need history, session replay or
 At the prompt of a Claude Code terminal session:
 
 ```
-/plugin install agent-board --marketplace PedroRozas/agent-board
+/plugin install agent-board --marketplace PedroRozas/claude-plugins
 ```
 
 From a shell:
 
 ```
-claude plugin install agent-board --marketplace PedroRozas/agent-board
+claude plugin install agent-board --marketplace PedroRozas/claude-plugins
 ```
 
-In the desktop app, where `/plugin` does not run: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `PedroRozas/agent-board`, then **Add plugin**.
+In the desktop app, where `/plugin` does not run: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `PedroRozas/claude-plugins`, then **Add plugin**.
 
 Answer `y` to add the marketplace, then choose a scope. Install it at the **user** scope so every session publishes its state to the board. Sessions that don't run the plugin won't show up.
 
