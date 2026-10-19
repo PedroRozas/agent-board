@@ -1,17 +1,19 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Board, SessionSnapshot } from '../types'
-import { renderBoardText, renderSessionText } from './board-text'
+import { renderAgentText, renderBoardText, renderSessionText } from './board-text'
 import { DELETE_AFTER_MS, HIDDEN_AFTER_MS, sortSessions } from './format'
 import {
   addAgent,
   addUsage,
   applyUsageReport,
   completeTurn,
+  createAgent,
   createSnapshot,
   finishTool,
   isSessionSnapshot,
   normalizeSnapshot,
+  recordAgentAnswer,
   startTool,
   startTurn,
   syncAgentStatuses,
@@ -28,7 +30,7 @@ import {
   type Platform,
 } from './platform'
 import { summarizeTool } from './tool-summary'
-import { renderBoardList, renderSessionDetail } from './views'
+import { renderAgentDetail, renderBoardList, renderSessionDetail } from './views'
 
 const PANE_ID = 'agent-board'
 const TICK_MS = 3000
@@ -43,6 +45,7 @@ const FALLBACK_SHELL = '/bin/sh'
 const WEB_ARGUMENT = 'web'
 const PANEL_ARGUMENT = 'panel'
 const TEXT_ARGUMENTS: ReadonlySet<string> = new Set(['texto', 'text'])
+const POSITION_ARGUMENT = /^(\d+)(?:\.(\d+))?$/
 
 type Dashboard = { port: number; baseUrl: string; pageUrl: string }
 
@@ -57,6 +60,7 @@ const WINDOWS_OS = 'Windows_NT'
 const SNAPSHOT_REF = { plugin: 'agent-board', key: 'snapshot' } as const
 const BOARD_REF = { plugin: 'agent-board', key: 'board' } as const
 const SELECTED_REF = { plugin: 'agent-board', key: 'selectedId' } as const
+const SELECTED_AGENT_REF = { plugin: 'agent-board', key: 'selectedAgentId' } as const
 
 const isSet = (value: string | undefined): value is string => value !== undefined && value !== ''
 
@@ -293,17 +297,29 @@ async function startSession($: EngineInterface): Promise<void> {
 async function describeBoardAsText($: EngineInterface, args: string, messages: Messages): Promise<string> {
   const { value: board = EMPTY_BOARD } = await $.state.get(BOARD_REF)
   const ownId = (await readSnapshot($))?.id ?? null
-  const position = Number.parseInt(args.trim(), 10)
+  const match = POSITION_ARGUMENT.exec(args.trim())
 
-  if (Number.isNaN(position)) {
+  if (match === null) {
     return renderBoardText(board.sessions, board.refreshedAt, ownId, messages)
   }
 
-  const session = board.sessions[position - 1]
+  const sessionPosition = Number(match[1])
+  const session = board.sessions[sessionPosition - 1]
 
-  return session === undefined
-    ? messages.missingSession(position)
-    : renderSessionText(session, board.refreshedAt, ownId, messages)
+  if (session === undefined) {
+    return messages.missingSession(sessionPosition)
+  }
+
+  if (match[2] === undefined) {
+    return renderSessionText(session, sessionPosition, board.refreshedAt, ownId, messages)
+  }
+
+  const agentPosition = Number(match[2])
+  const agent = session.agents[agentPosition - 1]
+
+  return agent === undefined
+    ? messages.missingAgent(sessionPosition, agentPosition)
+    : renderAgentText(session, agent, board.refreshedAt, ownId, messages)
 }
 
 async function isDashboardRunning($: EngineInterface, dashboard: Dashboard): Promise<boolean> {
@@ -377,7 +393,12 @@ async function openDashboard($: EngineInterface, dashboard: Dashboard, messages:
 }
 
 async function selectSession($: EngineInterface, sessionId: string | null): Promise<void> {
+  await $.state.set(SELECTED_AGENT_REF, null)
   await $.state.set(SELECTED_REF, sessionId)
+}
+
+async function selectAgent($: EngineInterface, agentId: string | null): Promise<void> {
+  await $.state.set(SELECTED_AGENT_REF, agentId)
 }
 
 async function runCommand(
@@ -450,6 +471,10 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'agent-board' }, ($, e) => runCommand($, e.args, dashboard, messages))
 
   on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) {
+      return next(e)
+    }
+
     const now = await $.clock.now()
     const snapshot = await readSnapshot($)
     const branch = snapshot === null ? null : await readBranch($, snapshot.cwd)
@@ -465,9 +490,13 @@ export const register: Register = (on, options) => {
       await updateSnapshot($, snapshot => addUsage(snapshot, usage.model, usage))
     }
 
-    if (e.agentId === undefined) {
-      const now = await $.clock.now()
+    const now = await $.clock.now()
+    const agentId = e.agentId
+
+    if (agentId === undefined) {
       await updateSnapshot($, snapshot => completeTurn(snapshot, now))
+    } else if (e.answer !== '') {
+      await updateSnapshot($, snapshot => recordAgentAnswer(snapshot, agentId, e.answer, now))
     }
 
     return next(e)
@@ -480,17 +509,17 @@ export const register: Register = (on, options) => {
     if (agentId !== undefined && spawned.deny === undefined) {
       const now = await $.clock.now()
       await updateSnapshot($, snapshot =>
-        addAgent(snapshot, {
-          id: agentId,
-          type: e.subagentType,
-          description: e.description,
-          model: spawned.model,
-          status: 'running',
-          startedAt: now,
-          endedAt: null,
-          currentTool: null,
-          toolCount: 0,
-        }),
+        addAgent(
+          snapshot,
+          createAgent({
+            id: agentId,
+            type: e.subagentType,
+            description: e.description,
+            model: spawned.model,
+            prompt: e.prompt,
+            startedAt: now,
+          }),
+        ),
       )
     }
 
@@ -506,6 +535,7 @@ export const register: Register = (on, options) => {
     await updateSnapshot($, snapshot => startTool(snapshot, e.agentId, { id: activityId, tool, summary, startedAt }))
 
     const ran = await next(e)
+    const finishedAt = await $.clock.now()
     const agentLabel =
       e.agentId === undefined
         ? messages.mainAgent
@@ -517,7 +547,7 @@ export const register: Register = (on, options) => {
         tool,
         summary,
         isError: ran.deny !== undefined || ran.isError === true,
-      }),
+      }, finishedAt),
     )
 
     return ran
@@ -527,8 +557,24 @@ export const register: Register = (on, options) => {
     const elements = $.ui.resolve(e)
     const { value: board = EMPTY_BOARD } = await $.state.get(BOARD_REF)
     const { value: selectedId = null } = await $.state.get(SELECTED_REF)
+    const { value: selectedAgentId = null } = await $.state.get(SELECTED_AGENT_REF)
     const ownId = (await readSnapshot($))?.id ?? null
     const selected = board.sessions.find(session => session.id === selectedId)
+    const selectedAgent = selected?.agents.find(agent => agent.id === selectedAgentId)
+
+    if (selected !== undefined && selectedAgent !== undefined) {
+      return renderAgentDetail({
+        elements,
+        messages,
+        session: selected,
+        agent: selectedAgent,
+        now: board.refreshedAt,
+        ownId,
+        onBack: () => {
+          void selectAgent($, null)
+        },
+      })
+    }
 
     if (selected !== undefined) {
       return renderSessionDetail({
@@ -539,6 +585,9 @@ export const register: Register = (on, options) => {
         ownId,
         onBack: () => {
           void selectSession($, null)
+        },
+        onSelectAgent: agentId => {
+          void selectAgent($, agentId)
         },
       })
     }

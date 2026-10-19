@@ -1,6 +1,6 @@
 import type { Elements, RenderElement } from 'claude-code'
 
-import type { SessionSnapshot } from '../types'
+import type { AgentSnapshot, SessionSnapshot } from '../types'
 import {
   HEALTH_COLORS,
   formatClock,
@@ -13,7 +13,16 @@ import {
   totalUsage,
 } from './format'
 import type { Messages } from './i18n'
-import { activityText, agentText, sessionTitle, statusText, usageText } from './session-lines'
+import {
+  activityEntryText,
+  activityText,
+  agentAlertText,
+  agentStatsText,
+  agentSummaryText,
+  sessionTitle,
+  statusText,
+  usageText,
+} from './session-lines'
 import { isActiveAgent } from './snapshot'
 
 export type BoardElements = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
@@ -76,6 +85,7 @@ export type SessionDetailProps = {
   now: number
   ownId: string | null
   onBack: () => void
+  onSelectAgent: (agentId: string) => void
 }
 
 export const renderSessionDetail = ({
@@ -85,6 +95,7 @@ export const renderSessionDetail = ({
   now,
   ownId,
   onBack,
+  onSelectAgent,
 }: SessionDetailProps): RenderElement => {
   const { Box, Text, Button } = elements
   const health = sessionHealth(session, now)
@@ -115,11 +126,28 @@ export const renderSessionDetail = ({
       <Box flexDirection="column" marginTop={1}>
         <Text bold>{messages.agentsHeader(session.agents.filter(isActiveAgent).length)}</Text>
         {session.agents.length === 0 && <Text dimColor>{messages.noSubagents}</Text>}
-        {session.agents.map(agent => (
-          <Text key={`agent-${agent.id}`} dimColor={!isActiveAgent(agent)} wrap="truncate-end">
-            {agentText(agent, now, messages)}
-          </Text>
-        ))}
+        {session.agents.map(agent => {
+          const alert = agentAlertText(agent, now, messages)
+
+          return (
+            <Box key={`agent-${agent.id}`} flexDirection="column">
+              <Button
+                key={`open-agent-${agent.id}`}
+                label={agentSummaryText(agent, messages)}
+                onPress={() => onSelectAgent(agent.id)}
+              />
+              <Text dimColor={!isActiveAgent(agent)} wrap="truncate-end">
+                {agentStatsText(agent, now, messages)}
+                {agent.currentTool === null ? '' : ` · ${agent.currentTool.tool}: ${agent.currentTool.summary}`}
+              </Text>
+              {alert !== null && (
+                <Text color="warning" wrap="truncate-end">
+                  {alert}
+                </Text>
+              )}
+            </Box>
+          )
+        })}
       </Box>
 
       <Box flexDirection="column" marginTop={1}>
@@ -145,6 +173,73 @@ export const renderSessionDetail = ({
             {formatClock(entry.at)} {entry.agent} · {entry.tool}: {entry.summary}
           </Text>
         ))}
+      </Box>
+    </Box>
+  )
+}
+
+export type AgentDetailProps = {
+  elements: BoardElements
+  messages: Messages
+  session: SessionSnapshot
+  agent: AgentSnapshot
+  now: number
+  ownId: string | null
+  onBack: () => void
+}
+
+export const renderAgentDetail = ({
+  elements,
+  messages,
+  session,
+  agent,
+  now,
+  ownId,
+  onBack,
+}: AgentDetailProps): RenderElement => {
+  const { Box, Text, Button } = elements
+  const alert = agentAlertText(agent, now, messages)
+
+  return (
+    <Box flexDirection="column">
+      <Button key="back-to-session" label={messages.backToSession} onPress={onBack} />
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold wrap="truncate-end">
+          {agentSummaryText(agent, messages)}
+        </Text>
+        <Text dimColor wrap="truncate-end">
+          {agentStatsText(agent, now, messages)} · {sessionTitle(session, ownId, messages)}
+        </Text>
+        {alert !== null && (
+          <Text color="warning" wrap="truncate-end">
+            {alert}
+          </Text>
+        )}
+        {agent.currentTool !== null && (
+          <Text wrap="truncate-end">
+            {messages.agentNow}: {agent.currentTool.tool}: {agent.currentTool.summary}
+          </Text>
+        )}
+      </Box>
+
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold>{messages.agentPrompt}</Text>
+        <Text wrap="wrap">{agent.prompt === '' ? agent.description : agent.prompt}</Text>
+      </Box>
+
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold>{messages.agentActivity}</Text>
+        {agent.recent.length === 0 && <Text dimColor>{messages.noActivity}</Text>}
+        {agent.recent.slice(0, RECENT_SHOWN).map((entry, index) => (
+          <Text key={`agent-recent-${index}`} color={entry.isError ? 'error' : 'text'} wrap="truncate-end">
+            {formatClock(entry.at)} {activityEntryText(entry)}
+          </Text>
+        ))}
+      </Box>
+
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold>{messages.agentAnswer}</Text>
+        {agent.answer === null ? <Text dimColor>{messages.noAnswerYet}</Text> : <Text wrap="wrap">{agent.answer}</Text>}
       </Box>
     </Box>
   )

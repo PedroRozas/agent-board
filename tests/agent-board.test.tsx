@@ -1,7 +1,8 @@
 import type { AgentStatus, On, RenderSurface } from 'claude-code'
-import { describe, expect, mock, test } from 'claude-code/testing'
+import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
 
-import type { SessionSnapshot } from '../types'
+import { agentAlert } from '../hooks/agent-alert'
+import type { AgentSnapshot, SessionSnapshot } from '../types'
 
 const HOME = '/home/test'
 const SESSION_FILE = `${HOME}/.claude/agent-board/sessions/session-1.json`
@@ -58,6 +59,8 @@ const installWorld = (on: On, env: Readonly<Record<string, string>> = {}, platfo
 
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', ($, e) => ({ text: e.answer }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.surfaces', () => ({ value: world.surfaces }))
   on('session.id', () => ({ value: 'session-1' }))
@@ -136,6 +139,42 @@ const installWorld = (on: On, env: Readonly<Record<string, string>> = {}, platfo
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
 
   return { clock, world }
+}
+
+const AGENT_PROMPT = 'Busca dónde se valida el token de sesión y dime qué middleware lo hace'
+
+const SUBAGENT_LOOP = { agentId: 'agent-1' }
+
+const spawnAgent = ($: Engine, world: World) => {
+  world.agents = [{ id: 'agent-1', status: 'running' }]
+
+  return $.agent.spawn({
+    tool_use_id: 'tool-1',
+    prompt: AGENT_PROMPT,
+    description: 'Buscar uso de auth',
+    subagentType: 'Explore',
+    provider: { plugin: 'engine', tier: 'core' },
+    parentModel: 'claude-opus-5-5',
+    background: false,
+    fork: false,
+  })
+}
+
+const BASE_AGENT: AgentSnapshot = {
+  id: 'agent-1',
+  type: 'Explore',
+  description: 'Buscar uso de auth',
+  model: 'claude-haiku-5-5',
+  status: 'running',
+  startedAt: START_MS,
+  endedAt: null,
+  currentTool: null,
+  toolCount: 0,
+  prompt: AGENT_PROMPT,
+  answer: null,
+  recent: [],
+  lastActivityAt: START_MS,
+  consecutiveErrors: 0,
 }
 
 const readPublished = (world: World): SessionSnapshot => {
@@ -293,6 +332,91 @@ describe('agent-board', () => {
       expect(await ui.find({ text: /Sesiones activas \(1\)/ })).toBeDefined()
       await ui.unmount()
     }
+  })
+
+  test('a subagent keeps its prompt, its own activity and its answer without touching the session request', SPANISH, async ($, on) => {
+    const { clock, world } = installWorld(on)
+    on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'agent-1' }))
+    await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+    await spawnAgent($, world)
+    await $.turn.start({ text: AGENT_PROMPT, turnId: 'turn-agent', agentId: 'agent-1' })
+    await $.tool.call({ tool: 'Bash', command: 'rg token src', ...SUBAGENT_LOOP })
+    await $.turn.complete({
+      answer: 'El middleware requireSession de auth.ts valida el token',
+      durationMs: 1000,
+      isAborted: false,
+      turnId: 'turn-agent',
+      agentId: 'agent-1',
+      reason: 'answer',
+    })
+    await clock.advance(3000)
+
+    const published = readPublished(world)
+    const [agent] = published.agents
+
+    expect(published.prompt).toBe('')
+    expect(published.isWorking).toBe(false)
+    expect(agent?.prompt).toBe(AGENT_PROMPT)
+    expect(agent?.recent[0]?.summary).toBe('rg token src')
+    expect(agent?.consecutiveErrors).toBe(0)
+    expect(agent?.answer).toBe('El middleware requireSession de auth.ts valida el token')
+  })
+
+  test('flags a running agent whose tool runs too long, that went quiet or that keeps failing', async () => {
+    const now = START_MS + 4 * 60_000
+    const slowTool = { id: 'tool-9', tool: 'Grep', summary: 'token', startedAt: START_MS }
+
+    expect(agentAlert({ ...BASE_AGENT, currentTool: slowTool }, now)).toEqual({ kind: 'slowTool', tool: 'Grep', elapsedMs: 240_000 })
+    expect(agentAlert(BASE_AGENT, now)).toEqual({ kind: 'quiet', elapsedMs: 240_000 })
+    expect(agentAlert({ ...BASE_AGENT, consecutiveErrors: 3, lastActivityAt: now }, now)).toEqual({ kind: 'failing', errors: 3 })
+    expect(agentAlert({ ...BASE_AGENT, lastActivityAt: now - 60_000 }, now)).toBeNull()
+    expect(agentAlert({ ...BASE_AGENT, status: 'waiting' }, now)).toBeNull()
+    expect(agentAlert({ ...BASE_AGENT, status: 'completed', consecutiveErrors: 5 }, now)).toBeNull()
+  })
+
+  test('/agentes <session>.<agent> prints what the agent was asked, what it did and whether it is stuck', SPANISH, async ($, on) => {
+    const { clock, world } = installWorld(on)
+    world.surfaces = []
+    on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'agent-1' }))
+    await $.session.start({ cwd: '/work/my-app', surface: null, isInteractive: false })
+    await spawnAgent($, world)
+    await $.tool.call({ tool: 'Bash', command: 'rg token src', ...SUBAGENT_LOOP })
+    await clock.advance(4 * 60_000)
+
+    const session = await $.command.run({ command: 'agentes', args: '1', ...COMMAND_CONTEXT })
+    const agent = await $.command.run({ command: 'agentes', args: '1.1', ...COMMAND_CONTEXT })
+    const missing = await $.command.run({ command: 'agentes', args: '1.4', ...COMMAND_CONTEXT })
+
+    expect(session.text).toContain('1. trabajando · Explore · Buscar uso de auth')
+    expect(session.text).toContain('⚠ sin actividad hace 4m')
+    expect(session.text).toContain('Detalle de un agente: /agentes 1.<número>')
+    expect(agent.text).toContain('Le pidieron:')
+    expect(agent.text).toContain(AGENT_PROMPT)
+    expect(agent.text).toContain('Bash: rg token src')
+    expect(agent.text).toContain('⚠ sin actividad hace 4m')
+    expect(agent.text).toContain('Aún no responde.')
+    expect(missing.text).toContain('La sesión 1 no tiene un agente 4')
+  })
+
+  test('the pane opens an agent from the session detail and goes back to the session', SPANISH, async ($, on) => {
+    const { clock, world } = installWorld(on)
+    on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'agent-1' }))
+    await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+    await spawnAgent($, world)
+    await $.tool.call({ tool: 'Bash', command: 'rg token src', ...SUBAGENT_LOOP })
+    await clock.advance(3000)
+
+    const ui = await $.ui.mount({ plugin: 'agent-board', surface: 'terminal', component: 'Pane', requestId: 'agent-board', props: PANE_PROPS })
+    await ui.press({ key: 'open-session-1' })
+    await ui.press({ key: 'open-agent-agent-1' })
+
+    expect(await ui.find({ text: /Busca dónde se valida el token/ })).toBeDefined()
+    expect(await ui.find({ text: /Bash: rg token src/ })).toBeDefined()
+
+    await ui.press({ key: 'back-to-session' })
+
+    expect(await ui.find({ text: /Uso de tokens/ })).toBeDefined()
+    await ui.unmount()
   })
 
   test('in English the board answers /agent-board with English labels', async ($, on) => {

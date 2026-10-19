@@ -1,4 +1,5 @@
-import type { SessionHealth } from './format'
+import type { AgentAlert } from './agent-alert'
+import { formatDuration, type SessionHealth } from './format'
 
 export type Language = 'es' | 'en'
 
@@ -25,6 +26,15 @@ export type Messages = {
   outputTokens: (tokens: string) => string
   detailHint: string
   missingSession: (position: number) => string
+  missingAgent: (sessionPosition: number, agentPosition: number) => string
+  agentDetailHint: (sessionPosition: number) => string
+  agentAlert: (alert: AgentAlert) => string
+  agentPrompt: string
+  agentNow: string
+  agentActivity: string
+  agentAnswer: string
+  noAnswerYet: string
+  backToSession: string
   toolCount: (count: number) => string
   request: string
   agentsHeader: (active: number) => string
@@ -48,7 +58,7 @@ const plural = (count: number, singular: string, many: string): string => `${cou
 const SPANISH: Messages = {
   command: 'agentes',
   commandDescription: 'Muestra las sesiones activas, sus agentes y su uso',
-  argumentHint: '[web | panel | texto | número de sesión]',
+  argumentHint: '[web | panel | texto | sesión | sesión.agente]',
   paneTitle: 'Agentes',
   mainAgent: 'principal',
   subagent: 'subagente',
@@ -74,6 +84,21 @@ const SPANISH: Messages = {
   outputTokens: tokens => `salida ${tokens}`,
   detailHint: 'Detalle de una sesión: /agentes <número>',
   missingSession: position => `No hay una sesión ${position}. Usa /agentes texto para ver la lista.`,
+  missingAgent: (sessionPosition, agentPosition) =>
+    `La sesión ${sessionPosition} no tiene un agente ${agentPosition}. Usa /agentes ${sessionPosition} para ver sus agentes.`,
+  agentDetailHint: sessionPosition => `Detalle de un agente: /agentes ${sessionPosition}.<número>`,
+  agentAlert: alert =>
+    alert.kind === 'slowTool'
+      ? `${alert.tool} lleva ${formatDuration(alert.elapsedMs)} corriendo`
+      : alert.kind === 'quiet'
+        ? `sin actividad hace ${formatDuration(alert.elapsedMs)}`
+        : `${alert.errors} errores seguidos`,
+  agentPrompt: 'Le pidieron',
+  agentNow: 'Ahora',
+  agentActivity: 'Actividad del agente',
+  agentAnswer: 'Respuesta',
+  noAnswerYet: 'Aún no responde.',
+  backToSession: 'Volver a la sesión',
   toolCount: count => plural(count, 'herramienta', 'herramientas'),
   request: 'Pedido',
   agentsHeader: active => `Agentes (${active} activos)`,
@@ -97,7 +122,7 @@ const SPANISH: Messages = {
 const ENGLISH: Messages = {
   command: 'agent-board',
   commandDescription: 'Shows active sessions, their agents and their usage',
-  argumentHint: '[web | panel | text | session number]',
+  argumentHint: '[web | panel | text | session | session.agent]',
   paneTitle: 'Agents',
   mainAgent: 'main',
   subagent: 'subagent',
@@ -123,6 +148,21 @@ const ENGLISH: Messages = {
   outputTokens: tokens => `output ${tokens}`,
   detailHint: 'Session detail: /agent-board <number>',
   missingSession: position => `There is no session ${position}. Use /agent-board text to see the list.`,
+  missingAgent: (sessionPosition, agentPosition) =>
+    `Session ${sessionPosition} has no agent ${agentPosition}. Use /agent-board ${sessionPosition} to see its agents.`,
+  agentDetailHint: sessionPosition => `Agent detail: /agent-board ${sessionPosition}.<number>`,
+  agentAlert: alert =>
+    alert.kind === 'slowTool'
+      ? `${alert.tool} running for ${formatDuration(alert.elapsedMs)}`
+      : alert.kind === 'quiet'
+        ? `no activity for ${formatDuration(alert.elapsedMs)}`
+        : `${alert.errors} errors in a row`,
+  agentPrompt: 'Asked to',
+  agentNow: 'Now',
+  agentActivity: 'Agent activity',
+  agentAnswer: 'Answer',
+  noAnswerYet: 'No answer yet.',
+  backToSession: 'Back to the session',
   toolCount: count => plural(count, 'tool', 'tools'),
   request: 'Request',
   agentsHeader: active => `Agents (${active} active)`,
