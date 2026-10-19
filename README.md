@@ -143,6 +143,16 @@ claude plugin test .
 
 To try a local copy, start Claude Code with `claude --plugin-dir <path-to-agent-board>`.
 
+The session and subagent screenshots and `docs/agent-detail.gif` come from demo data in `scripts/demo/scenario.mjs`. To regenerate them you need [`playwright-core`](https://www.npmjs.com/package/playwright-core) with its Chromium, and Python 3 with Pillow for the GIF:
+
+```
+PLAYWRIGHT_CORE=<path-to-playwright-core> node scripts/demo/capture.mjs stills
+PLAYWRIGHT_CORE=<path-to-playwright-core> node scripts/demo/capture.mjs gif
+PLAYWRIGHT_CORE=<path-to-playwright-core> node scripts/demo/capture.mjs check
+```
+
+`stills` and `gif` write to `docs/`, or to the folder you pass after the mode. `check` drives the dashboard in the browser and fails if keyboard navigation or older session files break.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
