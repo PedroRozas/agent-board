@@ -1,6 +1,6 @@
 {
   "name": "agent-board",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "Live board of your Claude Code sessions, their subagents, activity and token usage",
   "author": { "name": "Pedro Rozas" },
   "license": "MIT",
