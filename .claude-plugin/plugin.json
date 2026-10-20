@@ -1,10 +1,12 @@
 {
   "name": "agent-board",
+  "displayName": "agent-board",
   "version": "0.3.0",
   "description": "Live board of your Claude Code sessions, their subagents, activity and token usage",
   "author": { "name": "Pedro Rozas" },
   "license": "MIT",
   "repository": "https://github.com/PedroRozas/agent-board",
+  "homepage": "https://github.com/PedroRozas/agent-board",
   "types": "./types/index.d.ts",
   "userConfig": {
     "language": {
