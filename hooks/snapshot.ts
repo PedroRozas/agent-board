@@ -5,6 +5,9 @@ import type { ActivityEntry, AgentSnapshot, RateLimitWindow, SessionSnapshot, To
 const RECENT_LIMIT = 30
 const FINISHED_AGENT_LIMIT = 10
 const PROMPT_LIMIT = 200
+const AGENT_PROMPT_LIMIT = 2000
+const AGENT_ANSWER_LIMIT = 2000
+const AGENT_RECENT_LIMIT = 20
 const TURN_HISTORY_MS = 60 * 60_000
 const TURN_HISTORY_LIMIT = 40
 const ACTIVE_AGENT_STATUSES: ReadonlySet<string> = new Set(['pending', 'running', 'waiting'])
@@ -13,6 +16,8 @@ const EMPTY_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite:
 export type SessionIdentity = Pick<SessionSnapshot, 'id' | 'project' | 'cwd' | 'branch' | 'model' | 'startedAt'>
 
 export type AgentStatusEntry = { id: string; status: string }
+
+export type AgentLaunch = Pick<AgentSnapshot, 'id' | 'type' | 'description' | 'model' | 'prompt' | 'startedAt'>
 
 export const isActiveAgent = (agent: AgentSnapshot): boolean => ACTIVE_AGENT_STATUSES.has(agent.status)
 
@@ -95,6 +100,19 @@ export const applyUsageReport = (snapshot: SessionSnapshot, report: UsageReport)
     ? snapshot
     : { ...snapshot, ...report }
 
+export const createAgent = (launch: AgentLaunch): AgentSnapshot => ({
+  ...launch,
+  prompt: launch.prompt.slice(0, AGENT_PROMPT_LIMIT),
+  status: 'running',
+  endedAt: null,
+  currentTool: null,
+  toolCount: 0,
+  answer: null,
+  recent: [],
+  lastActivityAt: launch.startedAt,
+  consecutiveErrors: 0,
+})
+
 const updateAgent = (
   snapshot: SessionSnapshot,
   agentId: string,
@@ -111,7 +129,12 @@ export const startTool = (
 ): SessionSnapshot =>
   agentId === undefined
     ? { ...snapshot, currentTool: activity }
-    : updateAgent(snapshot, agentId, agent => ({ ...agent, currentTool: activity, toolCount: agent.toolCount + 1 }))
+    : updateAgent(snapshot, agentId, agent => ({
+        ...agent,
+        currentTool: activity,
+        toolCount: agent.toolCount + 1,
+        lastActivityAt: activity.startedAt,
+      }))
 
 const clearToolIfCurrent = (current: ToolActivity | null, activityId: string): ToolActivity | null =>
   current !== null && current.id === activityId ? null : current
@@ -121,6 +144,7 @@ export const finishTool = (
   agentId: string | undefined,
   activityId: string,
   entry: ActivityEntry,
+  finishedAt: number,
 ): SessionSnapshot => {
   const cleared =
     agentId === undefined
@@ -128,10 +152,21 @@ export const finishTool = (
       : updateAgent(snapshot, agentId, agent => ({
           ...agent,
           currentTool: clearToolIfCurrent(agent.currentTool, activityId),
+          recent: [entry, ...agent.recent].slice(0, AGENT_RECENT_LIMIT),
+          lastActivityAt: finishedAt,
+          consecutiveErrors: entry.isError ? agent.consecutiveErrors + 1 : 0,
         }))
 
   return { ...cleared, recent: [entry, ...cleared.recent].slice(0, RECENT_LIMIT) }
 }
+
+export const recordAgentAnswer = (
+  snapshot: SessionSnapshot,
+  agentId: string,
+  answer: string,
+  at: number,
+): SessionSnapshot =>
+  updateAgent(snapshot, agentId, agent => ({ ...agent, answer: answer.slice(0, AGENT_ANSWER_LIMIT), lastActivityAt: at }))
 
 export const addAgent = (snapshot: SessionSnapshot, agent: AgentSnapshot): SessionSnapshot => ({
   ...snapshot,
@@ -164,6 +199,16 @@ export const syncAgentStatuses = (
   return isUnchanged ? snapshot : { ...snapshot, agents }
 }
 
+const normalizeAgent = (agent: AgentSnapshot): AgentSnapshot => ({
+  ...agent,
+  endedAt: agent.endedAt ?? null,
+  prompt: agent.prompt ?? '',
+  answer: agent.answer ?? null,
+  recent: Array.isArray(agent.recent) ? agent.recent : [],
+  lastActivityAt: agent.lastActivityAt ?? agent.startedAt,
+  consecutiveErrors: agent.consecutiveErrors ?? 0,
+})
+
 export const normalizeSnapshot = (snapshot: SessionSnapshot): SessionSnapshot => ({
   ...createSnapshot(snapshot),
   ...snapshot,
@@ -171,7 +216,7 @@ export const normalizeSnapshot = (snapshot: SessionSnapshot): SessionSnapshot =>
   costUsd: snapshot.costUsd ?? null,
   rateLimits: Array.isArray(snapshot.rateLimits) ? snapshot.rateLimits : [],
   turnHistory: Array.isArray(snapshot.turnHistory) ? snapshot.turnHistory : [],
-  agents: snapshot.agents.map(agent => ({ ...agent, endedAt: agent.endedAt ?? null })),
+  agents: snapshot.agents.map(normalizeAgent),
 })
 
 export const isSessionSnapshot = (value: unknown): value is SessionSnapshot => {

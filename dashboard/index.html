@@ -710,6 +710,71 @@
         color: var(--muted);
       }
 
+      .agents-table tbody tr {
+        cursor: pointer;
+      }
+
+      .agents-table tbody tr:hover td {
+        background: var(--surface-alt);
+      }
+
+      .agent-button {
+        padding: 0;
+        border: 0;
+        background: transparent;
+        font-weight: 700;
+        text-align: left;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .alert {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        width: fit-content;
+        padding: 2px 10px;
+        border: 1px solid var(--warn);
+        border-radius: 999px;
+        font-size: 12.5px;
+        font-weight: 600;
+        color: var(--warn);
+      }
+
+      .agents-table .alert {
+        margin-top: 6px;
+      }
+
+      .back-button {
+        width: fit-content;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--accent);
+        cursor: pointer;
+      }
+
+      .agent-text {
+        margin: 0;
+        max-height: 320px;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .request .agent-text {
+        font-size: 15px;
+        font-weight: 400;
+      }
+
+      .answer {
+        padding: 14px 16px;
+        border: 1px solid var(--line-soft);
+        border-radius: 10px;
+      }
+
       .command {
         font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
         font-size: 12.5px;
@@ -1218,6 +1283,20 @@
           pickSessionLog: 'Elige una sesión para ver su registro.',
           noToolsYet: 'Esta sesión todavía no usa herramientas.',
           logFailed: 'Falló',
+          openAgent: (type, description) => `Ver el detalle de ${type}: ${description}`,
+          backToSession: project => `← Volver a ${project}`,
+          agentOrigin: (model, project) => `${model}, lanzado desde ${project}`,
+          agentPrompt: 'Le pidieron',
+          agentAnswer: 'Respuesta',
+          noAnswerYet: 'Aún no responde.',
+          agentTools: 'Herramientas',
+          agentErrorsInRow: 'Errores seguidos',
+          agentTime: 'Tiempo',
+          agentModel: 'Modelo',
+          agentNoToolsYet: 'Este agente todavía no usa herramientas.',
+          alertSlowTool: (tool, duration) => `${tool} lleva ${duration} corriendo`,
+          alertQuiet: duration => `Sin actividad hace ${duration}`,
+          alertFailing: errors => `${errors} errores seguidos`,
           serverResponded: status => `el servidor respondió ${status}`,
           connectionLost: detail => `No hay conexión con el servidor de agent-board (${detail}). Inícialo de nuevo con /agentes web.`,
         },
@@ -1326,6 +1405,20 @@
           pickSessionLog: 'Pick a session to see its log.',
           noToolsYet: 'This session has not used any tools yet.',
           logFailed: 'Failed',
+          openAgent: (type, description) => `Show the detail of ${type}: ${description}`,
+          backToSession: project => `← Back to ${project}`,
+          agentOrigin: (model, project) => `${model}, launched from ${project}`,
+          agentPrompt: 'Asked to',
+          agentAnswer: 'Answer',
+          noAnswerYet: 'No answer yet.',
+          agentTools: 'Tools',
+          agentErrorsInRow: 'Errors in a row',
+          agentTime: 'Time',
+          agentModel: 'Model',
+          agentNoToolsYet: 'This agent has not used any tools yet.',
+          alertSlowTool: (tool, duration) => `${tool} running for ${duration}`,
+          alertQuiet: duration => `No activity for ${duration}`,
+          alertFailing: errors => `${errors} errors in a row`,
           serverResponded: status => `the server responded ${status}`,
           connectionLost: detail => `Cannot reach the agent-board server (${detail}). Restart it with /agent-board web.`,
         },
@@ -1377,6 +1470,8 @@
       const CONTEXT_WARNING_PERCENT = 80
       const LOG_LIMIT = 20
       const LABEL_FLIP_PERCENT = 68
+      const AGENT_STUCK_AFTER_MS = 3 * 60_000
+      const AGENT_FAILING_AFTER_ERRORS = 3
       const ACTIVE_AGENT_STATUSES = new Set(['pending', 'running', 'waiting'])
       const AGENT_STATUS_KEYS = {
         pending: 'agentPending',
@@ -1402,6 +1497,7 @@
         sessions: [],
         now: Date.now(),
         selectedId: decodeURIComponent(location.hash.slice(1)) || null,
+        selectedAgentId: null,
         hasLoaded: false,
       }
 
@@ -1487,6 +1583,43 @@
       const shortModel = model => (model ?? '').replace(/^claude-/, '')
       const clampPercent = value => Math.max(0, Math.min(100, value))
       const isActiveAgent = agent => ACTIVE_AGENT_STATUSES.has(agent.status)
+
+      const normalizeAgent = agent => ({
+        ...agent,
+        prompt: agent.prompt ?? '',
+        answer: agent.answer ?? null,
+        recent: Array.isArray(agent.recent) ? agent.recent : [],
+        lastActivityAt: agent.lastActivityAt ?? agent.startedAt,
+        consecutiveErrors: agent.consecutiveErrors ?? 0,
+      })
+
+      const normalizeSession = session => ({ ...session, agents: (session.agents ?? []).map(normalizeAgent) })
+
+      const agentAlertText = agent => {
+        if (agent.status !== 'running') {
+          return null
+        }
+
+        if (agent.consecutiveErrors >= AGENT_FAILING_AFTER_ERRORS) {
+          return t('alertFailing', agent.consecutiveErrors)
+        }
+
+        if (agent.currentTool !== null) {
+          const elapsed = state.now - agent.currentTool.startedAt
+
+          return elapsed >= AGENT_STUCK_AFTER_MS ? t('alertSlowTool', agent.currentTool.tool, formatDuration(elapsed)) : null
+        }
+
+        const quiet = state.now - agent.lastActivityAt
+
+        return quiet >= AGENT_STUCK_AFTER_MS ? t('alertQuiet', formatDuration(quiet)) : null
+      }
+
+      const alertBadge = agent => {
+        const text = agentAlertText(agent)
+
+        return text === null ? null : el('span', { className: 'alert', role: 'status' }, el('span', { 'aria-hidden': 'true' }, '⚠'), text)
+      }
 
       const health = session => {
         if (state.now - session.updatedAt > STALE_AFTER_MS) {
@@ -1696,9 +1829,26 @@
       }
 
       const selectSession = id => {
+        if (id !== state.selectedId) {
+          state.selectedAgentId = null
+        }
+
         state.selectedId = id
         history.replaceState(null, '', `#${encodeURIComponent(id)}`)
         render()
+      }
+
+      const selectAgent = id => {
+        state.selectedAgentId = id
+        render()
+        document.querySelector('[data-back]')?.focus({ preventScroll: true })
+      }
+
+      const closeAgent = () => {
+        const agentId = state.selectedAgentId
+        state.selectedAgentId = null
+        render()
+        document.querySelector(`[data-agent="${CSS.escape(agentId)}"]`)?.focus({ preventScroll: true })
       }
 
       const lane = session => {
@@ -2028,7 +2178,7 @@
 
                 return el(
                   'tr',
-                  { className: isActive ? '' : 'is-finished' },
+                  { className: isActive ? '' : 'is-finished', onClick: () => selectAgent(agent.id) },
                   el(
                     'td',
                     {},
@@ -2039,9 +2189,23 @@
                       agentStatusLabel(agent.status),
                     ),
                   ),
-                  el('td', {}, el('strong', {}, agent.type), el('span', { className: 'agent-model' }, shortModel(agent.model))),
+                  el(
+                    'td',
+                    {},
+                    el(
+                      'button',
+                      { type: 'button', className: 'agent-button', 'data-agent': agent.id, 'aria-label': t('openAgent', agent.type, agent.description) },
+                      agent.type,
+                    ),
+                    el('span', { className: 'agent-model' }, shortModel(agent.model)),
+                  ),
                   el('td', {}, agent.description),
-                  el('td', {}, agent.currentTool === null ? '—' : el('span', { className: 'command' }, `${agent.currentTool.tool} ${agent.currentTool.summary}`)),
+                  el(
+                    'td',
+                    {},
+                    agent.currentTool === null ? '—' : el('span', { className: 'command' }, `${agent.currentTool.tool} ${agent.currentTool.summary}`),
+                    alertBadge(agent),
+                  ),
                   el('td', { className: 'numeric' }, formatDuration((agent.endedAt ?? state.now) - agent.startedAt)),
                 )
               }),
@@ -2077,11 +2241,64 @@
         )
       }
 
-      const renderDetail = session => {
+      const agentStateBadge = agent => {
+        const isActive = isActiveAgent(agent)
+        const label = isActive
+          ? `${agentStatusLabel(agent.status)} · ${formatDuration(state.now - agent.startedAt)}`
+          : agentStatusLabel(agent.status)
+
+        return el('span', { className: `state ${isActive ? 'working' : 'idle'}` }, el('span', { className: 'dot', 'aria-hidden': 'true' }), label)
+      }
+
+      const renderAgentDetail = (detail, session, agent) => {
+        detail.replaceChildren(
+          ...[
+            el('button', { type: 'button', className: 'back-button', 'data-back': 'true', onClick: closeAgent }, t('backToSession', session.project)),
+            el(
+              'div',
+              { className: 'detail-head' },
+              el('div', {}, el('h2', {}, `${agent.type} · ${agent.description}`), el('span', { className: 'origin' }, t('agentOrigin', shortModel(agent.model), session.project))),
+              agentStateBadge(agent),
+            ),
+            alertBadge(agent),
+            el(
+              'div',
+              { className: 'request' },
+              el('span', {}, t('agentPrompt')),
+              el('p', { className: 'agent-text' }, agent.prompt === '' ? agent.description : agent.prompt),
+              agent.currentTool === null ? null : el('span', { className: 'command' }, `${agent.currentTool.tool} ${agent.currentTool.summary}`),
+            ),
+            el(
+              'div',
+              { className: 'stats' },
+              stat(t('agentTime'), formatDuration((agent.endedAt ?? state.now) - agent.startedAt)),
+              stat(t('agentTools'), String(agent.toolCount)),
+              stat(t('agentErrorsInRow'), String(agent.consecutiveErrors)),
+              stat(t('agentModel'), shortModel(agent.model)),
+            ),
+            el(
+              'div',
+              { className: 'block' },
+              el('h3', {}, t('agentAnswer')),
+              agent.answer === null
+                ? el('p', { className: 'empty' }, t('noAnswerYet'))
+                : el('div', { className: 'answer' }, el('p', { className: 'agent-text' }, agent.answer)),
+            ),
+          ].filter(Boolean),
+        )
+      }
+
+      const renderDetail = (session, agent) => {
         const detail = document.getElementById('detail')
 
         if (session === undefined) {
           detail.replaceChildren(el('p', { className: 'empty' }, t('pickSessionDetail')))
+
+          return
+        }
+
+        if (agent !== undefined) {
+          renderAgentDetail(detail, session, agent)
 
           return
         }
@@ -2115,12 +2332,21 @@
         )
       }
 
-      const renderLog = session => {
-        const target = document.getElementById('log')
-        document.getElementById('log-session').textContent = session?.project ?? ''
+      const emptyLogText = (session, agent) => {
+        if (session === undefined) {
+          return t('pickSessionLog')
+        }
 
-        if (session === undefined || session.recent.length === 0) {
-          target.replaceChildren(el('p', { className: 'empty' }, session === undefined ? t('pickSessionLog') : t('noToolsYet')))
+        return agent === undefined ? t('noToolsYet') : t('agentNoToolsYet')
+      }
+
+      const renderLog = (session, agent) => {
+        const target = document.getElementById('log')
+        const entries = agent?.recent ?? session?.recent ?? []
+        document.getElementById('log-session').textContent = agent === undefined ? session?.project ?? '' : `${session.project} · ${agent.type}`
+
+        if (entries.length === 0) {
+          target.replaceChildren(el('p', { className: 'empty' }, emptyLogText(session, agent)))
 
           return
         }
@@ -2129,7 +2355,7 @@
           el(
             'ol',
             { className: 'log' },
-            session.recent.slice(0, LOG_LIMIT).map(entry =>
+            entries.slice(0, LOG_LIMIT).map(entry =>
               el(
                 'li',
                 { className: entry.isError ? 'failed' : null },
@@ -2141,7 +2367,7 @@
                     'div',
                     { className: 'log-head' },
                     el('span', { className: 'log-tool' }, entry.tool),
-                    el('span', { className: 'chip' }, entry.agent),
+                    agent === undefined ? el('span', { className: 'chip' }, entry.agent) : null,
                     entry.isError ? el('span', { className: 'log-failure' }, t('logFailed')) : null,
                   ),
                   el('span', { className: 'command', title: entry.summary }, entry.summary),
@@ -2179,6 +2405,8 @@
 
       const render = () => {
         const focusedSession = document.activeElement?.dataset?.session ?? null
+        const focusedAgent = document.activeElement?.dataset?.agent ?? null
+        const isBackFocused = document.activeElement?.dataset?.back !== undefined
         const scroll = captureScroll()
         const sessions = sortSessions(state.sessions)
 
@@ -2187,17 +2415,30 @@
         }
 
         const selected = sessions.find(session => session.id === state.selectedId)
+        const selectedAgent = selected?.agents.find(agent => agent.id === state.selectedAgentId)
+
+        if (selectedAgent === undefined) {
+          state.selectedAgentId = null
+        }
 
         renderHeader(sessions)
         renderKpis(sessions)
         renderSessions(sessions)
         renderCharts(sessions)
         renderTimeline(sessions)
-        renderDetail(selected)
-        renderLog(selected)
+        renderDetail(selected, selectedAgent)
+        renderLog(selected, selectedAgent)
 
         if (focusedSession !== null) {
           document.querySelector(`[data-session="${CSS.escape(focusedSession)}"]`)?.focus({ preventScroll: true })
+        }
+
+        if (focusedAgent !== null) {
+          document.querySelector(`[data-agent="${CSS.escape(focusedAgent)}"]`)?.focus({ preventScroll: true })
+        }
+
+        if (isBackFocused) {
+          document.querySelector('[data-back]')?.focus({ preventScroll: true })
         }
 
         restoreScroll(scroll)
@@ -2216,7 +2457,7 @@
           }
 
           const body = await response.json()
-          state.sessions = body.sessions
+          state.sessions = body.sessions.map(normalizeSession)
           state.now = body.now
           state.hasLoaded = true
           showNotice(null)

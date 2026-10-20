@@ -1,4 +1,5 @@
-import type { AgentSnapshot, SessionSnapshot, TokenUsage } from '../types'
+import type { ActivityEntry, AgentSnapshot, SessionSnapshot, TokenUsage } from '../types'
+import { agentAlert } from './agent-alert'
 import { formatDuration, formatTokens, sessionHealth, shortModel } from './format'
 import type { Messages } from './i18n'
 import { isActiveAgent } from './snapshot'
@@ -36,8 +37,31 @@ export const agentText = (agent: AgentSnapshot, now: number, messages: Messages)
   const tool = agent.currentTool === null ? '' : ` · ${agent.currentTool.tool}: ${agent.currentTool.summary}`
   const elapsed = isActiveAgent(agent) ? ` · ${formatDuration(now - agent.startedAt)}` : ''
 
-  return `${status} · ${agent.type} · ${agent.description} · ${shortModel(agent.model)} · ${messages.toolCount(agent.toolCount)}${elapsed}${tool}`
+  const alert = agentAlertText(agent, now, messages)
+
+  return `${status} · ${agent.type} · ${agent.description} · ${shortModel(agent.model)} · ${messages.toolCount(agent.toolCount)}${elapsed}${tool}${alert === null ? '' : ` · ${alert}`}`
 }
+
+export const agentSummaryText = (agent: AgentSnapshot, messages: Messages): string => {
+  const status = messages.agentStatus[agent.status] ?? agent.status
+
+  return `${status} · ${agent.type} · ${agent.description}`
+}
+
+export const agentStatsText = (agent: AgentSnapshot, now: number, messages: Messages): string => {
+  const elapsed = formatDuration((agent.endedAt ?? now) - agent.startedAt)
+
+  return `${shortModel(agent.model)} · ${messages.toolCount(agent.toolCount)} · ${elapsed}`
+}
+
+export const agentAlertText = (agent: AgentSnapshot, now: number, messages: Messages): string | null => {
+  const alert = agentAlert(agent, now)
+
+  return alert === null ? null : `⚠ ${messages.agentAlert(alert)}`
+}
+
+export const activityEntryText = (entry: ActivityEntry): string =>
+  `${entry.isError ? '✗ ' : ''}${entry.tool}: ${entry.summary}`
 
 export const usageText = (usage: TokenUsage, messages: Messages): string =>
   [

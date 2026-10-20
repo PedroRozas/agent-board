@@ -1,11 +1,11 @@
 # agent-board
 
-A live board of every Claude Code session running on your machine: what each one is doing right now, the subagents it launched, its context and cost, token usage per model, and how much of your plan's rate limits you have left.
+A live board of every Claude Code session running on your machine: what each one is doing right now, the subagents it launched and what each of them was asked and is doing, its context and cost, token usage per model, and how much of your plan's rate limits you have left.
 
 It comes in three views:
 
-- **Web dashboard**: a local page with KPIs, a 30-minute activity timeline, cost per project, tokens per model and a per-session activity log.
-- **Pane**: a panel docked inside Claude Code that lists the sessions and opens the detail of the one you pick.
+- **Web dashboard**: a local page with KPIs, a 30-minute activity timeline, cost per project, tokens per model, a per-session activity log and the detail of each subagent.
+- **Pane**: a panel docked inside Claude Code that lists the sessions and opens the detail of the session or subagent you pick.
 - **Text**: the same board printed in the conversation. It works anywhere, including headless and remote sessions.
 
 <img alt="agent-board updating live: a second subagent starts, another finishes, a failed tool is marked on the timeline, and cost, tokens and plan usage go up" src="docs/live.gif" width="100%">
@@ -30,12 +30,25 @@ It comes in three views:
 
 </details>
 
-<sub>The animation and screenshots use demo data, with time sped up in the animation.</sub>
+<details>
+<summary>Subagent detail: what it was asked, whether it is stuck, its own log and its answer</summary>
+
+<img alt="Opening subagents from the session detail: one is flagged because its Bash command has been running for 7 minutes, another fills its own log until its answer arrives" src="docs/agent-detail.gif" width="100%">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/agent-dark.png">
+  <img alt="agent-board subagent detail with its prompt, a stuck warning, its stats, its answer and a log filtered to that subagent" src="docs/agent-light.png">
+</picture>
+
+</details>
+
+<sub>The animations and screenshots use demo data, with time sped up in the animations.</sub>
 
 ## Why agent-board?
 
 - **No database, no Docker, no npm install.** Each session writes a small JSON file. The web view only needs Node: it is a single script that uses Node's standard library, starts on demand and stops itself after 30 idle minutes. The pane and text views need nothing.
 - **It lives where you work.** Besides the web dashboard, the board opens as a pane inside Claude Code and prints as text, so it also works over SSH and in headless sessions.
+- **It shows what each subagent is up to.** Open any subagent to see the prompt it got, its own tool log and its final answer. A running subagent is flagged when a tool has been running for 3 minutes, when it has shown no activity for 3 minutes, or after 3 failed tools in a row.
 - **It shows how much of your plan is left.** The 5-hour and weekly rate limits appear with a pace marker, so you can tell whether you are burning through them too fast.
 - **It stays on your machine.** The dashboard listens only on `127.0.0.1`, rejects requests for any other host and loads nothing from the internet.
 - **English and Spanish.** The pane, the text view and the dashboard come in both languages.
@@ -68,6 +81,7 @@ Answer `y` to add the marketplace, then choose a scope. Install it at the **user
 | `/agent-board panel` | Opens the board as a pane inside Claude Code |
 | `/agent-board text` | Prints the board in the conversation |
 | `/agent-board <number>` | Prints the detail of session `<number>` from the list |
+| `/agent-board <number>.<agent>` | Prints the detail of subagent `<agent>` of that session, such as `/agent-board 2.1` |
 
 With the language set to Spanish, the command is `/agentes` and `text` also accepts `texto`.
 
@@ -113,6 +127,7 @@ The dashboard is a small Node server (`dashboard/server.mjs`) bound to `127.0.0.
 Everything stays on your machine. Keep in mind that the snapshot files are plain JSON in your home directory, and that they include:
 
 - the first 200 characters of each session's latest prompt;
+- the first 2,000 characters of the prompt each subagent was given and of its final answer;
 - short summaries of recent tool calls, such as file names and shell commands.
 
 On macOS and Linux, every session sets `~/.claude/agent-board` and its `sessions` folder to mode `700` when it starts, so other users on the machine cannot read them. On Windows the files inherit the permissions of your user profile.
@@ -127,6 +142,16 @@ claude plugin test .
 ```
 
 To try a local copy, start Claude Code with `claude --plugin-dir <path-to-agent-board>`.
+
+The session and subagent screenshots and `docs/agent-detail.gif` come from demo data in `scripts/demo/scenario.mjs`. To regenerate them you need [`playwright-core`](https://www.npmjs.com/package/playwright-core) with its Chromium, and Python 3 with Pillow for the GIF:
+
+```
+PLAYWRIGHT_CORE=<path-to-playwright-core> node scripts/demo/capture.mjs stills
+PLAYWRIGHT_CORE=<path-to-playwright-core> node scripts/demo/capture.mjs gif
+PLAYWRIGHT_CORE=<path-to-playwright-core> node scripts/demo/capture.mjs check
+```
+
+`stills` and `gif` write to `docs/`, or to the folder you pass after the mode. `check` drives the dashboard in the browser and fails if keyboard navigation or older session files break.
 
 ## License
 
