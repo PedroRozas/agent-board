@@ -1,5 +1,8 @@
 # agent-board
 
+[![CI](https://github.com/PedroRozas/agent-board/actions/workflows/ci.yml/badge.svg)](https://github.com/PedroRozas/agent-board/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A live board of every Claude Code session running on your machine: what each one is doing right now, the subagents it launched and what each of them was asked and is doing, its context and cost, token usage per model, and how much of your plan's rate limits you have left.
 
 It comes in three views:
