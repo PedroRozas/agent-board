@@ -2,10 +2,15 @@ import type { AgentStatus, On, RenderSurface } from 'claude-code'
 import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
 
 import { agentAlert } from '../hooks/agent-alert'
+import { DELETE_AFTER_MS } from '../hooks/format'
 import type { AgentSnapshot, SessionSnapshot } from '../types'
 
 const HOME = '/home/test'
-const SESSION_FILE = `${HOME}/.claude/agent-board/sessions/session-1.json`
+const SESSIONS_DIR = `${HOME}/.claude/agent-board/sessions`
+const SESSION_FILE = `${SESSIONS_DIR}/session-1.json`
+const TEMPORARY_FILE = `${SESSIONS_DIR}/.session-1.json.tmp`
+const OTHER_SESSION_FILE = `${SESSIONS_DIR}/session-2.json`
+const OTHER_TEMPORARY_FILE = `${SESSIONS_DIR}/.session-2.json.tmp`
 const START_MS = 1_800_000_000_000
 const PROCESS_OK = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 const PANE_PROPS = {
@@ -40,6 +45,29 @@ const openedBrowser = (world: World): string[] | undefined =>
   world.commands.find(argv => BROWSER_COMMANDS.has(argv[0] ?? ''))
 
 const COMMAND_CONTEXT = { origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 100 } }
+
+const MOVE_ITEM = /^Move-Item -LiteralPath '(.+?)' -Destination '(.+?)' -Force/
+
+const movedPaths = (argv: readonly string[]): [string, string] | null => {
+  if (argv[0] === 'mv') {
+    const [, , from, to] = argv
+
+    return from !== undefined && to !== undefined ? [from, to] : null
+  }
+
+  const match = MOVE_ITEM.exec(argv[4] ?? '')
+
+  return match?.[1] !== undefined && match[2] !== undefined ? [match[1], match[2]] : null
+}
+
+const moveFile = (world: World, from: string, to: string): void => {
+  const file = world.files.get(from)
+
+  if (file !== undefined) {
+    world.files.delete(from)
+    world.files.set(to, file)
+  }
+}
 
 const installWorld = (on: On, env: Readonly<Record<string, string>> = {}, platform = 'Darwin') => {
   const clock = mock.clock(on, { now: START_MS })
@@ -89,6 +117,12 @@ const installWorld = (on: On, env: Readonly<Record<string, string>> = {}, platfo
       }
 
       return { value: { ...PROCESS_OK, exitCode: 1, stderr: 'Operation not permitted\n' } }
+    }
+
+    const move = movedPaths(e.argv)
+
+    if (move !== null) {
+      moveFile(world, ...move)
     }
 
     if ((e.argv[e.argv.length - 1] ?? '').includes('dashboard/server.mjs')) {
@@ -305,7 +339,7 @@ describe('agent-board', () => {
       id: 'session-2',
       rateLimits: [{ kind: 'seven_day', percentUsed: 17, resetsAt: weekReset }],
     }
-    world.files.set(`${HOME}/.claude/agent-board/sessions/session-2.json`, {
+    world.files.set(OTHER_SESSION_FILE, {
       text: JSON.stringify({ ...otherSession, updatedAt: START_MS + 10_000 }),
       mtimeMs: clock.now(),
     })
@@ -533,5 +567,97 @@ describe('agent-board', () => {
         expect(readPublished(world).project).toBe('my-app')
       })
     }
+  }
+
+  test('publishes through a temporary file renamed over the session file', async ($, on) => {
+    const { clock, world } = installWorld(on)
+    await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+
+    expect(world.commands).toContainEqual(['mv', '-f', TEMPORARY_FILE, SESSION_FILE])
+    expect(world.files.has(TEMPORARY_FILE)).toBe(false)
+    expect(readPublished(world).project).toBe('my-app')
+  })
+
+  test('on Windows the temporary file is renamed with Move-Item', async ($, on) => {
+    const { clock, world } = installWorld(on, { OS: 'Windows_NT', HOME: '', USERPROFILE: HOME }, 'MINGW64_NT')
+    await $.session.start({ cwd: 'C:\\Users\\dev\\my-app', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+
+    const move = world.commands.find(argv => (argv[4] ?? '').startsWith('Move-Item'))
+
+    expect(move?.[0]).toBe('powershell')
+    expect(move?.[4]).toBe(`Move-Item -LiteralPath '${TEMPORARY_FILE}' -Destination '${SESSION_FILE}' -Force -ErrorAction Stop`)
+    expect(world.commands.some(argv => argv[0] === 'mv')).toBe(false)
+    expect(readPublished(world).project).toBe('my-app')
+  })
+
+  test('temporary files never show up as sessions', async ($, on) => {
+    const { clock, world } = installWorld(on)
+    await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+    world.files.set(OTHER_TEMPORARY_FILE, {
+      text: JSON.stringify({ ...readPublished(world), id: 'session-2', project: 'other-app' }),
+      mtimeMs: clock.now(),
+    })
+    await clock.advance(3000)
+
+    const board = await $.command.run({ command: 'agent-board', args: 'text', ...COMMAND_CONTEXT })
+
+    expect(board.text).toContain('Active sessions (1)')
+    expect(board.text).not.toContain('other-app')
+  })
+
+  test('a session file read half written keeps its last snapshot and is logged only when it fails again', async ($, on) => {
+    const { clock, world } = installWorld(on)
+    await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+    world.files.set(OTHER_SESSION_FILE, {
+      text: JSON.stringify({ ...readPublished(world), id: 'session-2', project: 'other-app' }),
+      mtimeMs: clock.now(),
+    })
+    await clock.advance(3000)
+    world.files.set(OTHER_SESSION_FILE, { text: '{"id":"session-2","proj', mtimeMs: clock.now() })
+    await clock.advance(3000)
+
+    expect(world.logs.some(line => line.includes('skipped'))).toBe(false)
+
+    const board = await $.command.run({ command: 'agent-board', args: 'text', ...COMMAND_CONTEXT })
+
+    expect(board.text).toContain('Active sessions (2)')
+    expect(board.text).toContain('other-app')
+    expect(world.logs.some(line => line.startsWith(`agent-board: skipped ${OTHER_SESSION_FILE} (SyntaxError`))).toBe(true)
+  })
+
+  test('removes temporary files older than the session files retention', async ($, on) => {
+    const { clock, world } = installWorld(on)
+    world.files.set(OTHER_TEMPORARY_FILE, { text: '{"id":"session-2"', mtimeMs: START_MS - DELETE_AFTER_MS - 1 })
+    await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+    await clock.advance(3000)
+
+    expect(world.commands).toContainEqual(['rm', '-f', OTHER_TEMPORARY_FILE])
+    expect(world.commands.some(argv => argv[0] === 'rm' && argv.includes(TEMPORARY_FILE))).toBe(false)
+  })
+
+  for (const [mode, reason] of [
+    ['throw', /\(.+\)$/],
+    ['exit', /\(mv exited with 1: Operation not permitted\)$/],
+  ] as const) {
+    test(`when mv fails (${mode}) it logs the reason and the next tick publishes again`, async ($, on) => {
+      const { clock, world } = installWorld(on)
+      world.failingCommand = { name: 'mv', mode }
+      await $.session.start({ cwd: '/work/my-app', surface: 'terminal', isInteractive: true })
+      await clock.advance(3000)
+
+      const failure = world.logs.find(line => line.startsWith(`agent-board: could not publish ${SESSION_FILE}`))
+
+      expect(failure).toMatch(reason)
+      expect(world.logs.some(line => line.startsWith('agent-board: periodic refresh failed'))).toBe(false)
+
+      world.failingCommand = null
+      await clock.advance(3000)
+
+      expect(readPublished(world).project).toBe('my-app')
+    })
   }
 })
