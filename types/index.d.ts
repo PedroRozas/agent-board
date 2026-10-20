@@ -51,6 +51,12 @@ export type Board = { sessions: SessionSnapshot[]; refreshedAt: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'agent-board': { snapshot: SessionSnapshot | null; board: Board; selectedId: string | null; selectedAgentId: string | null }
+    'agent-board': {
+      snapshot: SessionSnapshot | null
+      board: Board
+      selectedId: string | null
+      selectedAgentId: string | null
+      unparsableFiles: string[]
+    }
   }
 }

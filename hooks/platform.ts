@@ -57,3 +57,11 @@ export const removeFilesCommand = (platform: Platform, paths: readonly string[])
         `Remove-Item -LiteralPath ${paths.map(powershellQuote).join(', ')} -Force -ErrorAction SilentlyContinue`,
       ]
     : ['rm', '-f', ...paths]
+
+export const moveFileCommand = (platform: Platform, from: string, to: string): string[] =>
+  platform === 'windows'
+    ? [
+        ...POWERSHELL,
+        `Move-Item -LiteralPath ${powershellQuote(from)} -Destination ${powershellQuote(to)} -Force -ErrorAction Stop`,
+      ]
+    : ['mv', '-f', from, to]

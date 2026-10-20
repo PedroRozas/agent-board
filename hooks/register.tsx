@@ -23,6 +23,7 @@ import {
   browserCommand,
   dashboardLaunchCommand,
   lastPathSegment,
+  moveFileCommand,
   platformFromUname,
   removeFilesCommand,
   resolvePort,
@@ -36,6 +37,8 @@ const PANE_ID = 'agent-board'
 const TICK_MS = 3000
 const BOARD_DIR_SUFFIX = '/.claude/agent-board'
 const SESSIONS_DIR_NAME = 'sessions'
+const SNAPSHOT_SUFFIX = '.json'
+const TEMPORARY_SNAPSHOT_SUFFIX = '.json.tmp'
 const PRIVATE_DIRECTORY_MODE = '700'
 const EMPTY_BOARD: Board = { sessions: [], refreshedAt: 0 }
 const DASHBOARD_HOST = '127.0.0.1'
@@ -61,6 +64,13 @@ const SNAPSHOT_REF = { plugin: 'agent-board', key: 'snapshot' } as const
 const BOARD_REF = { plugin: 'agent-board', key: 'board' } as const
 const SELECTED_REF = { plugin: 'agent-board', key: 'selectedId' } as const
 const SELECTED_AGENT_REF = { plugin: 'agent-board', key: 'selectedAgentId' } as const
+const UNPARSABLE_FILES_REF = { plugin: 'agent-board', key: 'unparsableFiles' } as const
+
+type SessionFileRead =
+  | { kind: 'snapshot'; name: string; snapshot: SessionSnapshot | null }
+  | { kind: 'unparsable'; name: string; reason: string }
+
+type UnparsableSessionFile = Extract<SessionFileRead, { kind: 'unparsable' }>
 
 const isSet = (value: string | undefined): value is string => value !== undefined && value !== ''
 
@@ -127,8 +137,18 @@ async function publishSnapshot($: EngineInterface): Promise<void> {
   await updateSnapshot($, snapshot => ({ ...snapshot, updatedAt: now }))
   const snapshot = await readSnapshot($)
 
-  if (snapshot !== null) {
-    await $.fs.write(`${await sessionsDirectory($)}/${snapshot.id}.json`, JSON.stringify(snapshot))
+  if (snapshot === null) {
+    return
+  }
+
+  const directory = await sessionsDirectory($)
+  const temporaryPath = `${directory}/.${snapshot.id}${TEMPORARY_SNAPSHOT_SUFFIX}`
+  const path = `${directory}/${snapshot.id}${SNAPSHOT_SUFFIX}`
+  await $.fs.write(temporaryPath, JSON.stringify(snapshot))
+  const failure = await moveFile($, temporaryPath, path)
+
+  if (failure !== null) {
+    $.ui.log(`agent-board: could not publish ${path} (${failure})`)
   }
 }
 
@@ -188,23 +208,72 @@ async function securePrivateDirectories($: EngineInterface): Promise<void> {
   }
 }
 
-async function removeFiles($: EngineInterface, paths: readonly string[]): Promise<void> {
-  if (paths.length > 0) {
-    const platform = (await isWindows($)) ? 'windows' : 'other'
-    await $.process.run(removeFilesCommand(platform, paths), { timeoutMs: 5000 })
+async function fileCommandPlatform($: EngineInterface): Promise<Platform> {
+  return (await isWindows($)) ? 'windows' : 'other'
+}
+
+async function moveFile($: EngineInterface, from: string, to: string): Promise<string | null> {
+  const command = moveFileCommand(await fileCommandPlatform($), from, to)
+
+  try {
+    const { exitCode, stderr } = await $.process.run(command, { timeoutMs: 5000 })
+
+    return exitCode === 0 ? null : `${command[0]} exited with ${exitCode}: ${stderr.trim()}`
+  } catch (error) {
+    return String(error)
   }
 }
 
-async function readSessionFile($: EngineInterface, path: string): Promise<SessionSnapshot | null> {
-  try {
-    const parsed: unknown = JSON.parse(await $.fs.read(path))
-
-    return isSessionSnapshot(parsed) ? normalizeSnapshot(parsed) : null
-  } catch (error) {
-    $.ui.log(`agent-board: skipped ${path} (${String(error)})`)
-
-    return null
+async function removeFiles($: EngineInterface, paths: readonly string[]): Promise<void> {
+  if (paths.length > 0) {
+    await $.process.run(removeFilesCommand(await fileCommandPlatform($), paths), { timeoutMs: 5000 })
   }
+}
+
+const isBoardFile = (name: string): boolean => name.endsWith(SNAPSHOT_SUFFIX) || name.endsWith(TEMPORARY_SNAPSHOT_SUFFIX)
+
+const sessionIdOf = (name: string): string => name.slice(0, -SNAPSHOT_SUFFIX.length)
+
+const isUnparsable = (read: SessionFileRead): read is UnparsableSessionFile => read.kind === 'unparsable'
+
+async function readSessionFile($: EngineInterface, directory: string, name: string): Promise<SessionFileRead> {
+  try {
+    const parsed: unknown = JSON.parse(await $.fs.read(`${directory}/${name}`))
+
+    return { kind: 'snapshot', name, snapshot: isSessionSnapshot(parsed) ? normalizeSnapshot(parsed) : null }
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return { kind: 'unparsable', name, reason: String(error) }
+    }
+
+    $.ui.log(`agent-board: skipped ${directory}/${name} (${String(error)})`)
+
+    return { kind: 'snapshot', name, snapshot: null }
+  }
+}
+
+async function resolveSessions(
+  $: EngineInterface,
+  directory: string,
+  reads: readonly SessionFileRead[],
+): Promise<SessionSnapshot[]> {
+  const { value: board = EMPTY_BOARD } = await $.state.get(BOARD_REF)
+  const { value: previouslyUnparsable = [] } = await $.state.get(UNPARSABLE_FILES_REF)
+  const unparsable = reads.filter(isUnparsable)
+
+  for (const read of unparsable.filter(read => previouslyUnparsable.includes(read.name))) {
+    $.ui.log(`agent-board: skipped ${directory}/${read.name} (${read.reason})`)
+  }
+
+  await $.state.set(UNPARSABLE_FILES_REF, unparsable.map(read => read.name))
+
+  return reads
+    .map(read =>
+      read.kind === 'snapshot'
+        ? read.snapshot
+        : (board.sessions.find(session => session.id === sessionIdOf(read.name)) ?? null),
+    )
+    .filter((snapshot): snapshot is SessionSnapshot => snapshot !== null)
 }
 
 async function refreshBoard($: EngineInterface): Promise<void> {
@@ -217,15 +286,15 @@ async function refreshBoard($: EngineInterface): Promise<void> {
     return
   }
 
-  const files = (await $.fs.list(directory)).filter(entry => entry.kind === 'file' && entry.name.endsWith('.json'))
+  const files = (await $.fs.list(directory)).filter(entry => entry.kind === 'file' && isBoardFile(entry.name))
   await removeFiles(
     $,
     files.filter(entry => now - entry.mtimeMs > DELETE_AFTER_MS).map(entry => `${directory}/${entry.name}`),
   )
 
-  const recentFiles = files.filter(entry => now - entry.mtimeMs <= HIDDEN_AFTER_MS)
-  const snapshots = await Promise.all(recentFiles.map(entry => readSessionFile($, `${directory}/${entry.name}`)))
-  const sessions = snapshots.filter((snapshot): snapshot is SessionSnapshot => snapshot !== null)
+  const recentFiles = files.filter(entry => entry.name.endsWith(SNAPSHOT_SUFFIX) && now - entry.mtimeMs <= HIDDEN_AFTER_MS)
+  const reads = await Promise.all(recentFiles.map(entry => readSessionFile($, directory, entry.name)))
+  const sessions = await resolveSessions($, directory, reads)
 
   await $.state.set(BOARD_REF, { sessions: sortSessions(sessions), refreshedAt: now })
 }

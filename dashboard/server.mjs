@@ -14,6 +14,8 @@ const IDLE_CHECK_MS = 60_000
 const ALLOWED_HOSTS = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`])
 
 let lastRequestAt = Date.now()
+let lastSessionsByFile = new Map()
+let unparsableFiles = new Set()
 
 const readSessionFile = async (name, now) => {
   const path = join(SESSIONS_DIR, name)
@@ -22,17 +24,42 @@ const readSessionFile = async (name, now) => {
     const info = await stat(path)
 
     if (now - info.mtimeMs > HIDDEN_AFTER_MS) {
-      return null
+      return { name, session: null }
     }
 
-    return JSON.parse(await readFile(path, 'utf8'))
+    return { name, session: JSON.parse(await readFile(path, 'utf8')) }
   } catch (error) {
+    if (error instanceof SyntaxError) {
+      return { name, session: null, unparsable: error }
+    }
+
     if (error.code !== 'ENOENT') {
       console.error(`agent-board: skipped ${name}: ${error.message}`)
     }
 
-    return null
+    return { name, session: null }
   }
+}
+
+const resolveSessions = reads => {
+  const sessionsByFile = new Map()
+
+  for (const { name, session, unparsable } of reads) {
+    if (unparsable !== undefined && unparsableFiles.has(name)) {
+      console.error(`agent-board: skipped ${name}: ${unparsable.message}`)
+    }
+
+    const resolved = unparsable === undefined ? session : (lastSessionsByFile.get(name) ?? null)
+
+    if (resolved !== null) {
+      sessionsByFile.set(name, resolved)
+    }
+  }
+
+  lastSessionsByFile = sessionsByFile
+  unparsableFiles = new Set(reads.filter(read => read.unparsable !== undefined).map(read => read.name))
+
+  return [...sessionsByFile.values()]
 }
 
 const listSessionFiles = async () => {
@@ -49,9 +76,9 @@ const listSessionFiles = async () => {
 
 const readSessions = async () => {
   const now = Date.now()
-  const sessions = await Promise.all((await listSessionFiles()).map(name => readSessionFile(name, now)))
+  const reads = await Promise.all((await listSessionFiles()).map(name => readSessionFile(name, now)))
 
-  return { now, sessions: sessions.filter(session => session !== null) }
+  return { now, sessions: resolveSessions(reads) }
 }
 
 const sendJson = (response, status, body) => {
